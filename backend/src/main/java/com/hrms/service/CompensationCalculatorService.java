@@ -81,6 +81,7 @@ public class CompensationCalculatorService {
     public CompensationCalculatorResponse calculateMonthlyCompensation(
             BigDecimal baseSalary,
             BigDecimal overtimeHours,
+            BigDecimal taxDeduction,  
             BigDecimal overtimeMultiplier,
             BigDecimal bonusPercentage,
             BigDecimal taxPercentage,
