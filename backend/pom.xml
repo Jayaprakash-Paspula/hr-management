@@ -26,7 +26,7 @@
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <springdoc-openapi.version>2.1.0</springdoc-openapi.version>
-        <itext.version>8.0.0</itext.version>
+        <itext.version>7.2.5</itext.version>
         <jjwt.version>0.12.3</jjwt.version>
     </properties>
 
