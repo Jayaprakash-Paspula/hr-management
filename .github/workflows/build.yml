@@ -1,10 +1,12 @@
 name: build.yml
+
 on:
   workflow_dispatch:
 
 jobs:
-  hr-management-app:
+  build-images:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -18,11 +20,20 @@ jobs:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Build and push Docker images
-        uses: docker/build-push-action@v3
+      # 🔹 Build Backend Image
+      - name: Build & Push Backend
+        uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ./backend
+          file: ./backend/Dockerfile
           push: true
-          tags: |
-            your-dockerhub-username/hrms-backend:latest
-            your-dockerhub-username/hrms-frontend:latest
+          tags: your-dockerhub-username/hrms-backend:latest
+
+      # 🔹 Build Frontend Image
+      - name: Build & Push Frontend
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: your-dockerhub-username/hrms-frontend:latest
