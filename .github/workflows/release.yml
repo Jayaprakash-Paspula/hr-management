@@ -1,0 +1,246 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g., 1.0.0, 1.1.0-beta)'
+        required: true
+        type: string
+      release-notes:
+        description: 'Release notes'
+        required: false
+        type: string
+
+jobs:
+  # 🔹 Create Release
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      upload-url: ${{ steps.create-release.outputs.upload_url }}
+      version: ${{ github.event.inputs.version }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate version format
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          if [[ ! $VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+)?$ ]]; then
+            echo "❌ Invalid version format: $VERSION"
+            echo "Expected format: 1.0.0 or 1.0.0-beta"
+            exit 1
+          fi
+          echo "✅ Version format valid: $VERSION"
+
+      - name: Check if version tag exists
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "❌ Version v$VERSION already exists"
+            exit 1
+          fi
+          echo "✅ Version is new"
+
+      - name: Update version in files
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          # Update pom.xml
+          sed -i "s/<version>.*<\/version>/<version>$VERSION<\/version>/g" ./backend/pom.xml
+          # Update package.json
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/g" ./frontend/package.json
+          # Update application.yml
+          sed -i "s/version: .*/version: $VERSION/g" ./backend/src/main/resources/application.yml
+          echo "✅ Version files updated"
+
+      - name: Create changelog entry
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          DATE=$(date +'%Y-%m-%d')
+          cat > /tmp/changelog.md << EOF
+          ## [$VERSION] - $DATE
+
+          ### Added
+          - New features in this release
+
+          ### Changed
+          - Breaking changes and modifications
+
+          ### Fixed
+          - Bug fixes
+
+          ### Security
+          - Security improvements
+
+          ${{ github.event.inputs.release-notes }}
+          EOF
+          cat /tmp/changelog.md
+
+      - name: Commit and tag
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add -A
+          git commit -m "Release v$VERSION"
+          git tag -a "v$VERSION" -m "Release version $VERSION"
+          echo "✅ Created tag: v$VERSION"
+
+      - name: Push changes and tags
+        run: |
+          git push origin main
+          git push origin --tags
+          echo "✅ Pushed to repository"
+
+      - name: Create Release
+        id: create-release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          release_name: Release ${{ github.event.inputs.version }}
+          body: |
+            Release version ${{ github.event.inputs.version }}
+            
+            ${{ github.event.inputs.release-notes }}
+          draft: false
+          prerelease: ${{ contains(github.event.inputs.version, 'beta') || contains(github.event.inputs.version, 'alpha') }}
+
+  # 🔹 Build Release Artifacts
+  build-artifacts:
+    runs-on: ubuntu-latest
+    needs: create-release
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.create-release.outputs.version }}
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: maven
+
+      - name: Build Backend JAR
+        working-directory: ./backend
+        run: |
+          mvn clean package -DskipTests
+          JAR_FILE="target/hr-management-app-${{ needs.create-release.outputs.version }}.jar"
+          cp target/hr-management-app-1.0.0.jar "$JAR_FILE"
+          echo "✅ Built: $JAR_FILE"
+          ls -lh "$JAR_FILE"
+
+      - name: Upload Backend JAR
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload-url }}
+          asset_path: ./backend/target/hr-management-app-${{ needs.create-release.outputs.version }}.jar
+          asset_name: hrms-backend-${{ needs.create-release.outputs.version }}.jar
+          asset_content_type: application/java-archive
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: './frontend/package-lock.json'
+
+      - name: Build Frontend
+        working-directory: ./frontend
+        run: |
+          npm ci
+          npm run build
+          cd dist
+          zip -r "../hrms-frontend-${{ needs.create-release.outputs.version }}.zip" .
+          cd ..
+          echo "✅ Built: hrms-frontend-${{ needs.create-release.outputs.version }}.zip"
+          ls -lh "hrms-frontend-${{ needs.create-release.outputs.version }}.zip"
+
+      - name: Upload Frontend Build
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ needs.create-release.outputs.upload-url }}
+          asset_path: ./frontend/hrms-frontend-${{ needs.create-release.outputs.version }}.zip
+          asset_name: hrms-frontend-${{ needs.create-release.outputs.version }}.zip
+          asset_content_type: application/zip
+
+  # 🔹 Push Release Images
+  push-release-images:
+    runs-on: ubuntu-latest
+    needs: create-release
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: v${{ needs.create-release.outputs.version }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build & Push Backend Release Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/hrms-backend:v${{ needs.create-release.outputs.version }}
+            ${{ secrets.DOCKER_USERNAME }}/hrms-backend:stable
+          platforms: linux/amd64,linux/arm64
+
+      - name: Build & Push Frontend Release Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          push: true
+          tags: |
+            ${{ secrets.DOCKER_USERNAME }}/hrms-frontend:v${{ needs.create-release.outputs.version }}
+            ${{ secrets.DOCKER_USERNAME }}/hrms-frontend:stable
+          platforms: linux/amd64,linux/arm64
+
+  # 🔹 Notify Release
+  notify-release:
+    runs-on: ubuntu-latest
+    needs: [create-release, build-artifacts, push-release-images]
+    if: always()
+    steps:
+      - name: Notify Slack
+        uses: 8398a7/action-slack@v3
+        with:
+          status: ${{ job.status }}
+          text: |
+            🎉 Release v${{ needs.create-release.outputs.version }} published!
+            
+            📦 Artifacts:
+            - Backend JAR: hrms-backend-${{ needs.create-release.outputs.version }}.jar
+            - Frontend Build: hrms-frontend-${{ needs.create-release.outputs.version }}.zip
+            - Docker Images: v${{ needs.create-release.outputs.version }}
+          webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+          fields: repo,message,commit,author
+        continue-on-error: true
+
+      - name: Release summary
+        run: |
+          echo "✅ Release v${{ needs.create-release.outputs.version }} completed!"
+          echo ""
+          echo "Published artifacts:"
+          echo "  - Backend JAR"
+          echo "  - Frontend Build ZIP"
+          echo "  - Docker Images (Backend & Frontend)"
+          echo ""
+          echo "View release: https://github.com/${{ github.repository }}/releases/tag/v${{ needs.create-release.outputs.version }}"
+
