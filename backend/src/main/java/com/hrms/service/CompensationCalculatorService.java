@@ -16,38 +16,43 @@ import java.math.RoundingMode;
 @Slf4j
 public class CompensationCalculatorService {
 
+    private static final BigDecimal DEFAULT_TAX_PERCENTAGE = BigDecimal.valueOf(10);
+    private static final BigDecimal DEFAULT_BONUS_PERCENTAGE = BigDecimal.ZERO;
+    private static final BigDecimal DEFAULT_OTHER_DEDUCTIONS = BigDecimal.ZERO;
+    private static final BigDecimal REGULAR_WEEKLY_HOURS = BigDecimal.valueOf(40);
+    private static final BigDecimal MONTHLY_WORKING_HOURS = BigDecimal.valueOf(160);
+
     /**
      * Calculate compensation based on provided parameters
      */
     public CompensationCalculatorResponse calculateCompensation(CompensationCalculatorRequest request) {
-        BigDecimal baseSalary = new BigDecimal(request.getBaseSalary());
-        BigDecimal hourlyRate = new BigDecimal(request.getHourlyRate());
-        BigDecimal hoursWorked = new BigDecimal(request.getHoursWorked());
-        BigDecimal overtimeMultiplier = new BigDecimal(request.getOvertimeMultiplier());
-        BigDecimal bonusPercentage = new BigDecimal(request.getBonusPercentage() != null ? request.getBonusPercentage() : "0");
-        BigDecimal taxPercentage = new BigDecimal(request.getTaxPercentage() != null ? request.getTaxPercentage() : "10");
-        BigDecimal otherDeductions = new BigDecimal(request.getOtherDeductions() != null ? request.getOtherDeductions() : "0");
+        BigDecimal baseSalary = safeBigDecimal(request.getBaseSalary());
+        BigDecimal hourlyRate = safeBigDecimal(request.getHourlyRate());
+        BigDecimal hoursWorked = safeBigDecimal(request.getHoursWorked());
+        BigDecimal overtimeMultiplier = safeBigDecimal(request.getOvertimeMultiplier());
+        BigDecimal bonusPercentage = request.getBonusPercentage() != null ? safeBigDecimal(request.getBonusPercentage()) : DEFAULT_BONUS_PERCENTAGE;
+        BigDecimal taxPercentage = request.getTaxPercentage() != null ? safeBigDecimal(request.getTaxPercentage()) : DEFAULT_TAX_PERCENTAGE;
+        BigDecimal otherDeductions = request.getOtherDeductions() != null ? safeBigDecimal(request.getOtherDeductions()) : DEFAULT_OTHER_DEDUCTIONS;
 
-        // Regular hours (max 8 per day or 40 per week)
-        BigDecimal regularHours = BigDecimal.valueOf(40);
-        BigDecimal overtimeHours = hoursWorked.compareTo(regularHours) > 0
-                ? hoursWorked.subtract(regularHours)
+        // Regular vs Overtime hours
+        BigDecimal overtimeHours = hoursWorked.compareTo(REGULAR_WEEKLY_HOURS) > 0
+                ? hoursWorked.subtract(REGULAR_WEEKLY_HOURS)
                 : BigDecimal.ZERO;
 
-        // Calculate base pay
+        // Base pay
         BigDecimal basePay = hourlyRate.multiply(hoursWorked).setScale(2, RoundingMode.HALF_UP);
 
-        // Calculate overtime pay
+        // Overtime pay
         BigDecimal overtimeRate = hourlyRate.multiply(overtimeMultiplier);
         BigDecimal overtimePay = overtimeRate.multiply(overtimeHours).setScale(2, RoundingMode.HALF_UP);
 
-        // Calculate bonus
+        // Bonus
         BigDecimal bonus = baseSalary.multiply(bonusPercentage).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
 
         // Total earnings
         BigDecimal totalEarnings = basePay.add(overtimePay).add(bonus).setScale(2, RoundingMode.HALF_UP);
 
-        // Calculate deductions
+        // Deductions
         BigDecimal taxDeduction = totalEarnings.multiply(taxPercentage).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
         BigDecimal totalDeductions = taxDeduction.add(otherDeductions).setScale(2, RoundingMode.HALF_UP);
 
@@ -67,7 +72,7 @@ public class CompensationCalculatorService {
 
         response.setHoursWorked(hoursWorked.toString());
         response.setOvertimeHours(overtimeHours.toString());
-        response.setRegularHours(regularHours.toString());
+        response.setRegularHours(REGULAR_WEEKLY_HOURS.toString());
         response.setHourlyRate(hourlyRate.toString());
         response.setOvertimeRate(overtimeRate.toString());
 
@@ -81,24 +86,23 @@ public class CompensationCalculatorService {
     public CompensationCalculatorResponse calculateMonthlyCompensation(
             BigDecimal baseSalary,
             BigDecimal overtimeHours,
-            BigDecimal taxDeduction,  
             BigDecimal overtimeMultiplier,
             BigDecimal bonusPercentage,
             BigDecimal taxPercentage,
             BigDecimal otherDeductions) {
 
-        // Calculate monthly overtime pay
-        BigDecimal hourlyRate = baseSalary.divide(BigDecimal.valueOf(160), 2, RoundingMode.HALF_UP); // 160 hours per month
+        // Hourly rate based on 160 hours per month
+        BigDecimal hourlyRate = baseSalary.divide(MONTHLY_WORKING_HOURS, 2, RoundingMode.HALF_UP);
         BigDecimal overtimeRate = hourlyRate.multiply(overtimeMultiplier);
         BigDecimal overtimePay = overtimeRate.multiply(overtimeHours).setScale(2, RoundingMode.HALF_UP);
 
-        // Calculate bonus
+        // Bonus
         BigDecimal bonus = baseSalary.multiply(bonusPercentage).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
 
         // Total earnings
         BigDecimal totalEarnings = baseSalary.add(overtimePay).add(bonus).setScale(2, RoundingMode.HALF_UP);
 
-        // Calculate deductions
+        // Deductions
         BigDecimal taxDeduction = totalEarnings.multiply(taxPercentage).divide(BigDecimal.valueOf(100), 2, RoundingMode.HALF_UP);
         BigDecimal totalDeductions = taxDeduction.add(otherDeductions).setScale(2, RoundingMode.HALF_UP);
 
@@ -123,5 +127,15 @@ public class CompensationCalculatorService {
         log.debug("Monthly compensation calculated, net pay: {}", netPay);
         return response;
     }
-}
 
+    /**
+     * Utility method to safely convert to BigDecimal
+     */
+    private BigDecimal safeBigDecimal(String value) {
+        try {
+            return new BigDecimal(value);
+        } catch (Exception e) {
+            return BigDecimal.ZERO;
+        }
+    }
+}
